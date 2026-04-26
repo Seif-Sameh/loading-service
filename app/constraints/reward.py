@@ -242,7 +242,10 @@ def _count_stack_violations(
 def _count_stability_bearing(
     placements: list[Placement], items_by_id: dict[str, CargoItem]
 ) -> tuple[int, int]:
-    """Rough support-area + load-bearing check.
+    """Full O(N²) sweep — used by :func:`score_state` for terminal scoring.
+
+    For per-step delta checks during training, use :func:`stability_bearing_delta`
+    which is O(N) per call.
 
     - Stability: item is unstable if < 70 % of its base area is supported by items directly
       below or by the container floor (y == 0).
@@ -277,3 +280,47 @@ def _count_stability_bearing(
             unstable += 1
 
     return unstable, overloaded
+
+
+def stability_bearing_delta(
+    new: Placement,
+    others: list[Placement],
+    items_by_id: dict[str, CargoItem],
+) -> tuple[bool, bool]:
+    """O(N) delta version — returns ``(unstable_added, overloaded_added)`` for one new
+    placement.
+
+    Reasoning:
+    - A previously-placed item's support comes from items strictly below it; the new item
+      doesn't change that, so no existing item can become *newly* unstable.
+    - A previously-placed item's load comes from items above it. The only new load is from
+      the new item, and only if it sits *directly on top* of the existing one.
+
+    So we only need to:
+    1. Sum the supported area for the new item against its direct supporters.
+    2. Check pressure of new item against each direct supporter for overload.
+    """
+    new_item = items_by_id[new.item_id]
+    if new.position.y_mm == 0:
+        return False, False
+
+    supported_area = 0
+    overloaded_added = False
+    new_pressure = new_item.pressure_kpa
+    for bot in others:
+        if bot.y_max_mm != new.position.y_mm:
+            continue
+        ox = max(0, min(new.x_max_mm, bot.x_max_mm) - max(new.position.x_mm, bot.position.x_mm))
+        if ox == 0:
+            continue
+        oz = max(0, min(new.z_max_mm, bot.z_max_mm) - max(new.position.z_mm, bot.position.z_mm))
+        if oz == 0:
+            continue
+        supported_area += ox * oz
+        if not overloaded_added:
+            bot_item = items_by_id[bot.item_id]
+            if new_pressure > bot_item.crush_strength_kpa * 1.5:
+                overloaded_added = True
+
+    unstable_added = supported_area / new.rotated_dimensions.base_area_mm2 < 0.70
+    return unstable_added, overloaded_added

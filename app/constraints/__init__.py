@@ -2,7 +2,7 @@
 from .cog import CoGTracker
 from .imdg import imdg_violations, pair_ok
 from .mask import FeasibilityMask, build_feasibility_mask, is_placement_feasible
-from .reward import RewardConfig, RewardTerms, score_state, score_step
+from .reward import RewardConfig, RewardTerms, score_state, score_step, stability_bearing_delta
 
 __all__ = [
     "CoGTracker",
@@ -15,4 +15,5 @@ __all__ = [
     "pair_ok",
     "score_state",
     "score_step",
+    "stability_bearing_delta",
 ]

@@ -27,9 +27,9 @@ from app.constraints.mask import build_feasibility_mask
 from app.constraints.reward import (
     DEFAULT_REWARD_CFG,
     RewardConfig,
-    _count_stability_bearing,
     score_state,
     score_step,
+    stability_bearing_delta,
 )
 from app.env.ems import ExtractConfig, extract_candidate_actions
 from app.env.heightmap import Heightmap
@@ -94,6 +94,9 @@ class PackingEnv(gym.Env):
             }
         )
 
+        # Cached once — used in every step's constraint checks. Avoids rebuilding
+        # the dict 4096*32 times per training iteration.
+        self._items_by_id = {it.id: it for it in self.items}
         self._state: PackingState | None = None
         self.reset(seed=seed)
 
@@ -147,20 +150,11 @@ class PackingEnv(gym.Env):
         state.cog.add(placement, item.weight_kg)
         state.step_index += 1
 
-        items_by_id = {it.id: it for it in self.items}
-        unstable_count, overloaded_count = _count_stability_bearing(
-            state.placements, items_by_id
+        # O(N) delta — only checks the new placement against items it directly rests on.
+        # Replaces two O(N²) scans (current vs previous full state) used in v0.1.
+        unstable_added, overloaded_added = stability_bearing_delta(
+            placement, state.placements[:-1], self._items_by_id
         )
-        was_unstable_added = unstable_count > (
-            sum(1 for _ in state.placements[:-1])  # recompute cost small; OK for now
-            and 0
-        )
-        # Compute deltas: compare against a snapshot *without* the latest placement
-        prior_unstable, prior_overloaded = _count_stability_bearing(
-            state.placements[:-1], items_by_id
-        )
-        unstable_added = unstable_count > prior_unstable
-        overloaded_added = overloaded_count > prior_overloaded
 
         terms = score_step(
             placement_volume_mm3=placement.rotated_dimensions.volume_mm3,
@@ -200,7 +194,7 @@ class PackingEnv(gym.Env):
             item=item,
             container=self.container,
             placed=state.placements,
-            items_by_id={it.id: it for it in self.items},
+            items_by_id=self._items_by_id,
             current_total_weight_kg=state.total_weight_kg,
         )
         state.candidates = mask.filter_feasible()
@@ -286,10 +280,9 @@ class PackingEnv(gym.Env):
         """KPIs + scalar score for the terminal state."""
         state = self._state
         assert state is not None
-        items_by_id = {it.id: it for it in self.items}
         kpis, score = score_state(
             container=self.container,
             placements=state.placements,
-            items_by_id=items_by_id,
+            items_by_id=self._items_by_id,
         )
         return score, kpis
