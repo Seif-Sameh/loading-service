@@ -1,0 +1,13 @@
+services:
+  loading-service:
+    build: .
+    container_name: loading-service
+    ports:
+      - "8009:8009"
+    environment:
+      - LOG_LEVEL=INFO
+      - API_HOST=0.0.0.0
+      - API_PORT=8009
+    volumes:
+      - ./models:/srv/models:ro
+    restart: unless-stopped

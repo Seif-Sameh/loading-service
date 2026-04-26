@@ -1,0 +1,62 @@
+{
+  "description": "Alexandria-Port containerized-cargo commodity mix (estimated). Each entry is a category, the proportion of voyages it should appear in, and the cargo presets / ad-hoc filters that match it. Tune with port-authority data when available.",
+  "categories": [
+    {
+      "name": "Textiles & garments",
+      "proportion": 0.28,
+      "presets": ["bagged_grain_50kg", "carton_medium", "carton_large"],
+      "real_filter": { "min_volume_l": 5, "max_volume_l": 80, "max_weight_kg": 60 },
+      "hazmat_class": "none",
+      "fragility": 3
+    },
+    {
+      "name": "Bagged agricultural goods",
+      "proportion": 0.18,
+      "presets": ["bagged_grain_50kg", "eur_pallet_light"],
+      "real_filter": { "min_volume_l": 10, "max_volume_l": 150, "max_weight_kg": 80 },
+      "hazmat_class": "none",
+      "fragility": 3
+    },
+    {
+      "name": "Plastics & finished goods",
+      "proportion": 0.20,
+      "presets": ["carton_small", "carton_medium", "carton_large"],
+      "real_filter": { "min_volume_l": 1, "max_volume_l": 50, "max_weight_kg": 40 },
+      "hazmat_class": "none",
+      "fragility": 4
+    },
+    {
+      "name": "Iron, steel & machinery",
+      "proportion": 0.15,
+      "presets": ["machinery_small", "us_pallet"],
+      "real_filter": { "min_volume_l": 100, "max_volume_l": 1000, "min_weight_kg": 200 },
+      "hazmat_class": "none",
+      "fragility": 2
+    },
+    {
+      "name": "Reefer (fruit, perishables)",
+      "proportion": 0.08,
+      "presets": ["reefer_fruit_pallet"],
+      "real_filter": { "min_volume_l": 80, "max_volume_l": 250, "max_weight_kg": 800 },
+      "hazmat_class": "none",
+      "fragility": 4,
+      "requires_reefer": true
+    },
+    {
+      "name": "Hazmat (chemicals, corrosives)",
+      "proportion": 0.05,
+      "presets": ["steel_drum_200l", "hazmat_corrosive_drum"],
+      "real_filter": { "min_volume_l": 30, "max_volume_l": 250, "max_weight_kg": 250 },
+      "hazmat_class": "8",
+      "fragility": 2
+    },
+    {
+      "name": "General palletised cargo",
+      "proportion": 0.06,
+      "presets": ["eur_pallet_light", "eur_pallet_heavy", "us_pallet", "ibc_1000l"],
+      "real_filter": { "min_volume_l": 50, "max_volume_l": 1500, "max_weight_kg": 1100 },
+      "hazmat_class": "none",
+      "fragility": 3
+    }
+  ]
+}

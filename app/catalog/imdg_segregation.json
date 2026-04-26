@@ -1,0 +1,19 @@
+{
+  "description": "Simplified IMDG Table 7.2.4 segregation matrix. Values: 0=no restriction, 1=Away from (>=3 m), 2=Separated from (>=6 m fore-aft or 2.4 m lateral), 3=Separated by complete compartment (different container required), 4=Separated longitudinally by an intervening complete compartment.",
+  "classes": ["none", "1", "2", "3", "4", "5", "6", "7", "8", "9"],
+  "matrix": [
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+    [0, 0, 4, 4, 4, 4, 2, 2, 4, 2],
+    [0, 4, 0, 2, 1, 2, 0, 2, 1, 0],
+    [0, 4, 2, 0, 2, 2, 0, 2, 2, 0],
+    [0, 4, 1, 2, 0, 1, 0, 2, 1, 0],
+    [0, 4, 2, 2, 1, 0, 1, 2, 2, 0],
+    [0, 2, 0, 0, 0, 1, 0, 2, 1, 0],
+    [0, 2, 2, 2, 2, 2, 2, 0, 2, 0],
+    [0, 4, 1, 2, 1, 2, 1, 2, 0, 0],
+    [0, 2, 0, 0, 0, 0, 0, 0, 0, 0]
+  ],
+  "distance_mm_for_away_from": 3000,
+  "distance_mm_fore_aft_for_separated_from": 6000,
+  "distance_mm_lateral_for_separated_from": 2400
+}

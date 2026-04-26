@@ -1,0 +1,98 @@
+[
+  {
+    "code": "20GP",
+    "display_name": "20' General Purpose",
+    "internal": { "length_mm": 5898, "width_mm": 2352, "height_mm": 2393 },
+    "tare_kg": 2100,
+    "payload_kg": 28300,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4800,
+    "is_reefer": false,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "40GP",
+    "display_name": "40' General Purpose",
+    "internal": { "length_mm": 12032, "width_mm": 2352, "height_mm": 2393 },
+    "tare_kg": 3750,
+    "payload_kg": 26730,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": false,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "40HC",
+    "display_name": "40' High Cube",
+    "internal": { "length_mm": 12032, "width_mm": 2352, "height_mm": 2698 },
+    "tare_kg": 3900,
+    "payload_kg": 28800,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": false,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "45HC",
+    "display_name": "45' High Cube",
+    "internal": { "length_mm": 13556, "width_mm": 2352, "height_mm": 2698 },
+    "tare_kg": 4740,
+    "payload_kg": 25740,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": false,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "20RF",
+    "display_name": "20' Reefer",
+    "internal": { "length_mm": 5450, "width_mm": 2286, "height_mm": 2265 },
+    "tare_kg": 3050,
+    "payload_kg": 27430,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": true,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "40RF",
+    "display_name": "40' Reefer",
+    "internal": { "length_mm": 11580, "width_mm": 2286, "height_mm": 2265 },
+    "tare_kg": 4350,
+    "payload_kg": 26130,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": true,
+    "is_open_top": false,
+    "is_flat_rack": false
+  },
+  {
+    "code": "20OT",
+    "display_name": "20' Open Top",
+    "internal": { "length_mm": 5898, "width_mm": 2352, "height_mm": 2348 },
+    "tare_kg": 2260,
+    "payload_kg": 28220,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 4500,
+    "is_reefer": false,
+    "is_open_top": true,
+    "is_flat_rack": false
+  },
+  {
+    "code": "20FR",
+    "display_name": "20' Flat Rack",
+    "internal": { "length_mm": 5620, "width_mm": 2228, "height_mm": 2233 },
+    "tare_kg": 2900,
+    "payload_kg": 27580,
+    "mgw_kg": 30480,
+    "floor_load_kg_per_m2": 5500,
+    "is_reefer": false,
+    "is_open_top": false,
+    "is_flat_rack": true
+  }
+]
