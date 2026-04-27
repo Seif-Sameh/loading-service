@@ -54,6 +54,11 @@ class PPOConfig:
     max_grad_norm: float = 0.5
     device: str = "cpu"
     log_every: int = 10            # rollout iterations between log prints
+    # Reward warm-up: linearly ramp soft-constraint penalty weights from 0 → 1 over
+    # the first ``warmup_fraction`` of training. Lets the policy learn the basic packing
+    # signal (space utilisation) before being punished for CoG / stability / etc.
+    # Set to 0.0 to disable (full penalties from step 1).
+    warmup_fraction: float = 0.3
 
 
 @dataclass
@@ -96,24 +101,48 @@ class PPOTrainer:
         self.model.to(self.device)
         self.optimizer = optim.Adam(self.model.parameters(), lr=self.cfg.learning_rate)
         self._envs: list[PackingEnv] = []
+        self._global_steps = 0  # advanced by collect_rollout each iter
+        self._total_steps_target = 0  # set by train()
         self._reset_envs()
 
     # ----- env management -----
+
+    def _make_env(self) -> PackingEnv:
+        """Build one PackingEnv with the warmup-scaled reward config."""
+        from app.constraints.reward import RewardConfig
+        cont, items = self.sample_voyage_fn()
+        if self._total_steps_target > 0 and self.cfg.warmup_fraction > 0:
+            warmup_done = min(
+                1.0, self._global_steps / (self.cfg.warmup_fraction * self._total_steps_target)
+            )
+            scale = warmup_done  # 0 → 1 across warmup
+        else:
+            scale = 1.0
+        rcfg = RewardConfig(
+            w_util=1.0,
+            w_cog_long=0.3 * scale,
+            w_cog_lat=0.3 * scale,
+            w_cog_vert=0.3 * scale,
+            w_stability=0.2 * scale,
+            w_bearing=0.2 * scale,
+            w_lifo=0.4 * scale,
+            w_stack=0.2 * scale,
+            w_imdg=1.0 * scale,
+        )
+        return PackingEnv(container=cont, items=items, max_candidates=80, reward_cfg=rcfg)
 
     def _reset_envs(self) -> list[dict[str, np.ndarray]]:
         self._envs = []
         first_obs: list[dict[str, np.ndarray]] = []
         for _ in range(self.cfg.n_envs):
-            cont, items = self.sample_voyage_fn()
-            env = PackingEnv(container=cont, items=items, max_candidates=80)
+            env = self._make_env()
             obs, _ = env.reset()
             self._envs.append(env)
             first_obs.append(obs)
         return first_obs
 
     def _restart_env(self, idx: int) -> dict[str, np.ndarray]:
-        cont, items = self.sample_voyage_fn()
-        env = PackingEnv(container=cont, items=items, max_candidates=80)
+        env = self._make_env()
         obs, _ = env.reset()
         self._envs[idx] = env
         return obs
@@ -268,21 +297,39 @@ class PPOTrainer:
 
     # ----- public train loop -----
 
-    def train(self, total_steps: int, on_log: Callable[[dict], None] | None = None) -> None:
-        steps_done = 0
+    def train(
+        self,
+        total_steps: int,
+        on_log: Callable[[dict], None] | None = None,
+        *,
+        resume_from_steps: int = 0,
+    ) -> None:
+        """Run PPO until ``total_steps`` env-steps have been collected.
+
+        ``resume_from_steps`` lets you continue a prior session: pass the step count of the
+        loaded checkpoint so warmup scaling stays consistent across runs.
+        """
+        self._total_steps_target = total_steps
+        self._global_steps = resume_from_steps
         rollout_iter = 0
-        while steps_done < total_steps:
+        while self._global_steps < total_steps:
             buf, ep_returns, ep_utils = self.collect_rollout()
             losses = self.update(buf)
-            steps_done += self.cfg.rollout_steps * self.cfg.n_envs
+            self._global_steps += self.cfg.rollout_steps * self.cfg.n_envs
             rollout_iter += 1
             if on_log and (rollout_iter % self.cfg.log_every == 0 or rollout_iter == 1):
+                warmup_pct = (
+                    100.0 * min(1.0, self._global_steps / (self.cfg.warmup_fraction * total_steps))
+                    if self.cfg.warmup_fraction > 0
+                    else 100.0
+                )
                 on_log({
                     "iter": rollout_iter,
-                    "steps_done": steps_done,
+                    "steps_done": self._global_steps,
                     "episodes": len(ep_returns),
                     "mean_return": float(np.mean(ep_returns)) if ep_returns else 0.0,
                     "mean_util": float(np.mean(ep_utils)) if ep_utils else 0.0,
+                    "warmup_pct": warmup_pct,
                     **losses,
                 })
 
@@ -290,9 +337,24 @@ class PPOTrainer:
 
     def save(self, path) -> None:
         torch.save(
-            {"model_state": self.model.state_dict(), "cfg": vars(self.model.cfg)},
+            {
+                "model_state": self.model.state_dict(),
+                "cfg": vars(self.model.cfg),
+                "optimizer_state": self.optimizer.state_dict(),
+                "global_steps": self._global_steps,
+            },
             path,
         )
+
+    def load_checkpoint(self, path: str) -> int:
+        """Load model + optimizer state from a checkpoint. Returns steps_done."""
+        ckpt = torch.load(path, map_location=self.device, weights_only=False)
+        self.model.load_state_dict(ckpt["model_state"])
+        if "optimizer_state" in ckpt:
+            self.optimizer.load_state_dict(ckpt["optimizer_state"])
+        steps = int(ckpt.get("global_steps", 0))
+        self._global_steps = steps
+        return steps
 
     @classmethod
     def load_model(cls, path: str, *, device: str = "cpu") -> PackingTransformer:
