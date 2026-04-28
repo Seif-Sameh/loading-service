@@ -24,13 +24,14 @@ from torch import nn
 
 @dataclass
 class PackingTransformerConfig:
-    embed_dim: int = 128
+    embed_dim: int = 192          # bumped from 128 for Option-B sizing
     n_heads: int = 4
-    n_encoder_blocks: int = 3
-    mlp_hidden: int = 256
+    n_encoder_blocks: int = 4     # bumped from 3
+    mlp_hidden: int = 384         # bumped from 256
     dropout: float = 0.0
-    n_rotations: int = 2  # upright-only: LWH and WLH
-    ems_dim: int = 6  # (x, y, z, l, w, h) normalised
+    n_rotations: int = 2          # upright-only: LWH and WLH
+    ems_dim: int = 6              # (x, y, z, l, w, h) normalised
+    lookahead: int = 5            # number of items the encoder attends to (current + 4 future)
 
 
 class _MultiHeadCrossAttention(nn.Module):
@@ -72,7 +73,11 @@ class _MLPBlock(nn.Module):
 
 
 class _PackingEncoderBlock(nn.Module):
-    """One encoder block: EMS self-attn → item self-attn → bidirectional cross-attn → MLP."""
+    """One encoder block: EMS self-attn → item self-attn → bidirectional cross-attn → MLP.
+
+    Both branches accept a key-padding mask so unused slots (zero-padded EMSs and
+    zero-padded lookahead items) are excluded from attention.
+    """
 
     def __init__(self, cfg: PackingTransformerConfig) -> None:
         super().__init__()
@@ -88,10 +93,11 @@ class _PackingEncoderBlock(nn.Module):
         ems: torch.Tensor,
         item: torch.Tensor,
         ems_pad_mask: torch.Tensor,
+        item_pad_mask: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         ems = self.ems_self(ems, ems, ems, key_padding_mask=ems_pad_mask)
-        item = self.item_self(item, item, item)
-        new_ems = self.ems_to_item(ems, item, item)
+        item = self.item_self(item, item, item, key_padding_mask=item_pad_mask)
+        new_ems = self.ems_to_item(ems, item, item, key_padding_mask=item_pad_mask)
         new_item = self.item_to_ems(item, ems, ems, key_padding_mask=ems_pad_mask)
         new_ems = self.ems_mlp(new_ems)
         new_item = self.item_mlp(new_item)
@@ -122,39 +128,50 @@ class PackingTransformer(nn.Module):
 
     def forward(
         self,
-        ems: torch.Tensor,  # (B, K, 6) float in [0, 1]
-        item: torch.Tensor,  # (B, R, 3) float in [0, 1]
-        mask: torch.Tensor,  # (B, K) bool, True = valid
+        ems: torch.Tensor,            # (B, K, 6) float in [0, 1]
+        items: torch.Tensor,          # (B, L, R, 3) float in [0, 1]
+        mask: torch.Tensor,           # (B, K) bool, True = valid EMS
+        items_mask: torch.Tensor | None = None,  # (B, L) bool, True = real item (not padding)
     ) -> tuple[torch.Tensor, torch.Tensor]:
         """Return (action_logits, state_value).
 
         ``action_logits`` has shape ``(B, K * n_rotations)`` — one logit per
-        (EMS index, rotation) pair, masked to -inf where the EMS is padding.
+        (EMS index, rotation) pair for the **current** item, masked to -inf where the
+        EMS slot is padding.
+
+        The lookahead items beyond slot 0 are context for the encoder's cross-attention;
+        they don't add to the action space.
         """
         B, K, _ = ems.shape
-        ems_pad = ~mask  # PyTorch's MultiheadAttention treats True as "ignore"
+        L = items.shape[1]
+        R = items.shape[2]
+        if items_mask is None:
+            items_mask = torch.ones(B, L, dtype=torch.bool, device=items.device)
+
+        ems_pad = ~mask
+        # Each lookahead-item × rotation becomes a separate token: (B, L*R, 3) → embed.
+        item_seq = items.reshape(B, L * R, 3)
+        # Tile the items_mask across rotations so both rotations of one item share its mask.
+        item_pad = ~items_mask.unsqueeze(-1).expand(-1, -1, R).reshape(B, L * R)
+
         e = self.ems_proj(ems)
-        i = self.item_proj(item)
+        i = self.item_proj(item_seq)
         for block in self.blocks:
-            e, i = block(e, i, ems_pad)
+            e, i = block(e, i, ems_pad, item_pad)
 
-        # Build per-(EMS, rotation) feature: concatenate EMS embedding with the rotation embedding.
-        # Item tensor has R rotations; broadcast to K so we get (B, K, R, 2*embed).
-        i_exp = i.unsqueeze(1).expand(-1, K, -1, -1)         # (B, K, R, embed)
-        e_exp = e.unsqueeze(2).expand(-1, -1, self.cfg.n_rotations, -1)  # (B, K, R, embed)
-        joint = torch.cat([e_exp, i_exp], dim=-1)            # (B, K, R, 2*embed)
-        # actor_head.in = 2*embed, out = n_rotations → reuse ems_proj-then-actor_head per rotation
-        # Simpler: per-rotation linear with 1 output and stack.
+        # Action head uses ONLY the current-item rotations (slots [0, R)) of the item sequence.
+        current_item_emb = i[:, :R, :]                       # (B, R, embed)
+        i_exp = current_item_emb.unsqueeze(1).expand(-1, K, -1, -1)        # (B, K, R, embed)
+        e_exp = e.unsqueeze(2).expand(-1, -1, R, -1)                       # (B, K, R, embed)
+        joint = torch.cat([e_exp, i_exp], dim=-1)                          # (B, K, R, 2*embed)
         per_rot = []
-        for r in range(self.cfg.n_rotations):
+        for r in range(R):
             per_rot.append(self.actor_head(joint[:, :, r, :])[:, :, r:r + 1])
-        logits = torch.cat(per_rot, dim=-1)                  # (B, K, R)
-
-        # Mask out padded EMSs
+        logits = torch.cat(per_rot, dim=-1)                                # (B, K, R)
         logits = logits.masked_fill(~mask.unsqueeze(-1), float("-inf"))
-        flat_logits = logits.reshape(B, K * self.cfg.n_rotations)
+        flat_logits = logits.reshape(B, K * R)
 
-        # Value head: mean-pooled EMS embeddings, ignoring padding
+        # Value: mean-pool over real EMS slots
         denom = mask.sum(dim=1, keepdim=True).clamp(min=1).to(e.dtype)
         pooled = (e * mask.unsqueeze(-1)).sum(dim=1) / denom
         value = self.critic_head(pooled).squeeze(-1)

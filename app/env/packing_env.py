@@ -73,6 +73,7 @@ class PackingEnv(gym.Env):
         *,
         heightmap_resolution_mm: int = 10,
         max_candidates: int = 80,
+        lookahead: int = 5,
         reward_cfg: RewardConfig = DEFAULT_REWARD_CFG,
         seed: int | None = None,
     ) -> None:
@@ -80,6 +81,7 @@ class PackingEnv(gym.Env):
         self.items = items
         self.heightmap_resolution_mm = heightmap_resolution_mm
         self.max_candidates = max_candidates
+        self.lookahead = lookahead
         self.reward_cfg = reward_cfg
         self.seed = seed
 
@@ -89,7 +91,10 @@ class PackingEnv(gym.Env):
         self.observation_space = spaces.Dict(
             {
                 "ems": spaces.Box(low=0.0, high=1.0, shape=(max_candidates, 6), dtype=np.float32),
-                "item": spaces.Box(low=0.0, high=1.0, shape=(2, 3), dtype=np.float32),
+                # (lookahead, R, 3) — current + next K-1 items, each with R=2 upright rotations.
+                # Padded with zeros when fewer remain.
+                "items": spaces.Box(low=0.0, high=1.0, shape=(lookahead, 2, 3), dtype=np.float32),
+                "items_mask": spaces.MultiBinary(lookahead),
                 "mask": spaces.MultiBinary(max_candidates),
             }
         )
@@ -218,13 +223,15 @@ class PackingEnv(gym.Env):
     def _obs(self) -> dict[str, np.ndarray]:
         """Tensor observation for the RL agent.
 
-        - ``ems``   — (K, 6) of (x, y, z, free_l, free_w, free_h) normalised by container.
-        - ``item``  — (2, 3) dimensions for the two upright rotations (next item).
-        - ``mask``  — (K,) 1 where the candidate slot is valid.
+        - ``ems``         — (K, 6) of (x, y, z, free_l, free_w, free_h) normalised.
+        - ``items``       — (lookahead, 2, 3) next L items × upright rotations × dims.
+        - ``items_mask``  — (lookahead,) 1 where the lookahead slot is a real item, 0 where padded.
+        - ``mask``        — (K,) 1 where the candidate slot is valid.
         """
         state = self._state
         assert state is not None
         K = self.max_candidates
+        Lk = self.lookahead
         ems = np.zeros((K, 6), dtype=np.float32)
         mask = np.zeros(K, dtype=np.int8)
         L = self.container.internal.length_mm
@@ -239,27 +246,22 @@ class PackingEnv(gym.Env):
             ems[i, 5] = c.rotated_dimensions.height_mm / H
             mask[i] = 1
 
-        if state.items_remaining:
-            it = state.items_remaining[0]
-            item_tensor = np.array(
-                [
-                    [
-                        it.dimensions.length_mm / L,
-                        it.dimensions.width_mm / W,
-                        it.dimensions.height_mm / H,
-                    ],
-                    [
-                        it.dimensions.width_mm / L,
-                        it.dimensions.length_mm / W,
-                        it.dimensions.height_mm / H,
-                    ],
-                ],
-                dtype=np.float32,
-            )
-        else:
-            item_tensor = np.zeros((2, 3), dtype=np.float32)
+        items_tensor = np.zeros((Lk, 2, 3), dtype=np.float32)
+        items_mask = np.zeros(Lk, dtype=np.int8)
+        for i, it in enumerate(state.items_remaining[:Lk]):
+            items_tensor[i, 0] = [
+                it.dimensions.length_mm / L,
+                it.dimensions.width_mm / W,
+                it.dimensions.height_mm / H,
+            ]
+            items_tensor[i, 1] = [
+                it.dimensions.width_mm / L,
+                it.dimensions.length_mm / W,
+                it.dimensions.height_mm / H,
+            ]
+            items_mask[i] = 1
 
-        return {"ems": ems, "item": item_tensor, "mask": mask}
+        return {"ems": ems, "items": items_tensor, "items_mask": items_mask, "mask": mask}
 
     def _info(self) -> dict[str, Any]:
         assert self._state is not None

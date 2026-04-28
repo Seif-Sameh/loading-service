@@ -41,13 +41,23 @@ def _load_mix() -> list[dict]:
 
 @dataclass
 class SamplerConfig:
-    """Knobs for :class:`AlexandriaSampler`."""
+    """Knobs for :class:`AlexandriaSampler`.
 
-    n_items: int = 30
-    strategy: Literal["real", "presets"] = "real"
+    Defaults are tuned so a 40HC container actually fills up:
+    - n_items=200 (many items per voyage)
+    - strategy="mixed" — 60 % real Wadaboa pool + 40 % catalog presets so each voyage
+      contains a realistic blend of small parcels and bigger industrial items
+      (pallets, drums, IBCs).
+
+    The pure "real" strategy alone leaves 40HC voyages mostly empty (median Wadaboa item
+    is ~13 L, so 200 items only fill ~3 % of a 76,000 L container). The mix gives
+    heuristics ~60-75 % utilisation on realistic-looking voyages.
+    """
+
+    n_items: int = 200
+    strategy: Literal["real", "presets", "mixed"] = "mixed"
+    real_share: float = 0.60  # used by "mixed": fraction of items drawn from Wadaboa pool
     seed: int | None = 0
-    # When the cumulative weight would exceed ``container.payload_kg`` we still emit items
-    # so the algorithms get a chance to refuse them (good for testing the weight constraint).
     cap_total_weight_kg: float | None = None
 
 
@@ -67,7 +77,54 @@ class AlexandriaSampler:
     def sample(self) -> list[CargoItem]:
         if self.cfg.strategy == "presets":
             return self._sample_from_presets()
-        return self._sample_from_real_pool()
+        if self.cfg.strategy == "real":
+            return self._sample_from_real_pool()
+        return self._sample_mixed()
+
+    def _sample_mixed(self) -> list[CargoItem]:
+        """Mix real Wadaboa-pool items with catalog presets per item.
+
+        The pool gives realistic small-parcel variety; presets contribute the bigger
+        items (pallets, IBCs, drums, machinery) that actually fill containers.
+        """
+        if self._pool is None:
+            self._pool = load_product_pool()
+        items: list[CargoItem] = []
+        for i in range(self.cfg.n_items):
+            cat = self._draw_category()
+            use_real = self.rng.random() < self.cfg.real_share
+            if use_real:
+                pool = self._filtered_pool(cat)
+                if len(pool) == 0:
+                    use_real = False
+            if use_real:
+                row = int(self.np_rng.integers(0, len(pool)))
+                d = Dimensions(
+                    length_mm=int(pool.depth_mm[row]),
+                    width_mm=int(pool.width_mm[row]),
+                    height_mm=int(pool.height_mm[row]),
+                )
+                items.append(
+                    CargoItem(
+                        id=f"alex-{i:04d}",
+                        preset_code=None,
+                        label=cat["name"],
+                        dimensions=d,
+                        weight_kg=float(pool.weight_kg[row]),
+                        fragility=FragilityClass(cat.get("fragility", 3)),
+                        crush_strength_kpa=120.0,
+                        stackable_layers=3,
+                        this_side_up=cat.get("hazmat_class", "none") != "none",
+                        allow_all_rotations=False,
+                        requires_reefer=cat.get("requires_reefer", False),
+                        hazmat_class=HazmatClass(cat.get("hazmat_class", "none")),
+                        delivery_stop=0,
+                    )
+                )
+            else:
+                preset_code = self.rng.choice(cat["presets"])
+                items.append(get_cargo_preset(preset_code, item_id=f"alex-{i:04d}"))
+        return items
 
     # ----- presets path -----
 

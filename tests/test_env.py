@@ -25,7 +25,9 @@ def test_heightmap_support_ratio_floor_is_one(container_40hc):
 def test_packing_env_reset_yields_candidates(container_40hc, eur_pallets_10):
     env = PackingEnv(container=container_40hc, items=eur_pallets_10)
     obs, info = env.reset()
-    assert "ems" in obs and "item" in obs and "mask" in obs
+    assert "ems" in obs and "items" in obs and "items_mask" in obs and "mask" in obs
+    assert obs["items"].shape == (env.lookahead, 2, 3)
+    assert obs["items_mask"].shape == (env.lookahead,)
     assert info["n_placed"] == 0
     assert info["n_remaining"] == 10
     assert len(env.state.candidates) > 0

@@ -55,17 +55,16 @@ class PPOPackingAgent(PackingAlgorithm):
         if not state.candidates:
             return 0
 
-        K = self.model.cfg.ems_dim  # noqa: F841 — for clarity only
-        max_K = self.model.cfg.embed_dim and 80  # action space is fixed at 80 in the env
-
         cont = state.container
         L = cont.internal.length_mm
         W = cont.internal.width_mm
         H = cont.internal.height_mm
+        K = 160  # max_candidates for inference (matches env default for Option-B)
+        Lk = self.model.cfg.lookahead
 
-        ems = np.zeros((1, 80, 6), dtype=np.float32)
-        mask = np.zeros((1, 80), dtype=np.bool_)
-        for i, c in enumerate(state.candidates[:80]):
+        ems = np.zeros((1, K, 6), dtype=np.float32)
+        mask = np.zeros((1, K), dtype=np.bool_)
+        for i, c in enumerate(state.candidates[:K]):
             ems[0, i, 0] = c.position.x_mm / L
             ems[0, i, 1] = c.position.y_mm / H
             ems[0, i, 2] = c.position.z_mm / W
@@ -74,17 +73,20 @@ class PPOPackingAgent(PackingAlgorithm):
             ems[0, i, 5] = c.rotated_dimensions.height_mm / H
             mask[0, i] = True
 
-        item_arr = np.zeros((1, 2, 3), dtype=np.float32)
-        if state.current_item is not None:
-            d = state.current_item.dimensions
-            item_arr[0, 0] = [d.length_mm / L, d.width_mm / W, d.height_mm / H]
-            item_arr[0, 1] = [d.width_mm / L, d.length_mm / W, d.height_mm / H]
+        items_arr = np.zeros((1, Lk, 2, 3), dtype=np.float32)
+        items_mask = np.zeros((1, Lk), dtype=np.bool_)
+        for i, it in enumerate(state.items_remaining[:Lk]):
+            d = it.dimensions
+            items_arr[0, i, 0] = [d.length_mm / L, d.width_mm / W, d.height_mm / H]
+            items_arr[0, i, 1] = [d.width_mm / L, d.length_mm / W, d.height_mm / H]
+            items_mask[0, i] = True
 
         with torch.no_grad():
             t_ems = torch.from_numpy(ems).to(self.device)
-            t_item = torch.from_numpy(item_arr).to(self.device)
+            t_items = torch.from_numpy(items_arr).to(self.device)
+            t_items_mask = torch.from_numpy(items_mask).to(self.device)
             t_mask = torch.from_numpy(mask).to(self.device)
-            logits, _ = self.model(t_ems, t_item, t_mask)
+            logits, _ = self.model(t_ems, t_items, t_mask, t_items_mask)
             n_rot = self.model.cfg.n_rotations
             full_mask = t_mask.unsqueeze(-1).expand(-1, -1, n_rot).reshape(1, -1)
             logits = logits.masked_fill(~full_mask, float("-inf"))

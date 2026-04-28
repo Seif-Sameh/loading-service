@@ -59,13 +59,21 @@ class PPOConfig:
     # signal (space utilisation) before being punished for CoG / stability / etc.
     # Set to 0.0 to disable (full penalties from step 1).
     warmup_fraction: float = 0.3
+    # When True, soft-constraint penalty weights are forced to 0 for the entire run —
+    # the policy optimises space utilisation only. Constraints stay enforced through
+    # the hard feasibility mask. Recommended for fine-tuning a behaviorally-cloned
+    # imitation policy (otherwise penalties pull it back below heuristic quality).
+    util_only_reward: bool = False
+    max_candidates: int = 80
+    lookahead: int = 5
 
 
 @dataclass
 class _RolloutBuffer:
     obs_ems: list = field(default_factory=list)
-    obs_item: list = field(default_factory=list)
-    obs_mask: list = field(default_factory=list)
+    obs_items: list = field(default_factory=list)       # (B, L, R, 3)
+    obs_items_mask: list = field(default_factory=list)  # (B, L)
+    obs_mask: list = field(default_factory=list)        # (B, K)
     actions: list = field(default_factory=list)
     log_probs: list = field(default_factory=list)
     values: list = field(default_factory=list)
@@ -111,7 +119,9 @@ class PPOTrainer:
         """Build one PackingEnv with the warmup-scaled reward config."""
         from app.constraints.reward import RewardConfig
         cont, items = self.sample_voyage_fn()
-        if self._total_steps_target > 0 and self.cfg.warmup_fraction > 0:
+        if self.cfg.util_only_reward:
+            scale = 0.0  # zero out every soft constraint
+        elif self._total_steps_target > 0 and self.cfg.warmup_fraction > 0:
             warmup_done = min(
                 1.0, self._global_steps / (self.cfg.warmup_fraction * self._total_steps_target)
             )
@@ -129,7 +139,13 @@ class PPOTrainer:
             w_stack=0.2 * scale,
             w_imdg=1.0 * scale,
         )
-        return PackingEnv(container=cont, items=items, max_candidates=80, reward_cfg=rcfg)
+        return PackingEnv(
+            container=cont,
+            items=items,
+            max_candidates=self.cfg.max_candidates,
+            lookahead=self.cfg.lookahead,
+            reward_cfg=rcfg,
+        )
 
     def _reset_envs(self) -> list[dict[str, np.ndarray]]:
         self._envs = []
@@ -150,19 +166,20 @@ class PPOTrainer:
     # ----- inference helpers -----
 
     @staticmethod
-    def _stack_obs(obs_list: list[dict[str, np.ndarray]]) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    def _stack_obs(obs_list: list[dict[str, np.ndarray]]):
         ems = torch.from_numpy(np.stack([o["ems"] for o in obs_list])).float()
-        item = torch.from_numpy(np.stack([o["item"] for o in obs_list])).float()
+        items = torch.from_numpy(np.stack([o["items"] for o in obs_list])).float()
+        items_mask = torch.from_numpy(np.stack([o["items_mask"] for o in obs_list])).bool()
         mask = torch.from_numpy(np.stack([o["mask"] for o in obs_list])).bool()
-        return ems, item, mask
+        return ems, items, items_mask, mask
 
-    def _act(
-        self, obs_list: list[dict[str, np.ndarray]]
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
-        ems, item, mask = self._stack_obs(obs_list)
-        ems, item, mask = ems.to(self.device), item.to(self.device), mask.to(self.device)
-        logits, value = self.model(ems, item, mask)
-        # Build a 2K mask: each EMS slot has n_rotations actions
+    def _act(self, obs_list: list[dict[str, np.ndarray]]):
+        ems, items, items_mask, mask = self._stack_obs(obs_list)
+        ems = ems.to(self.device)
+        items = items.to(self.device)
+        items_mask = items_mask.to(self.device)
+        mask = mask.to(self.device)
+        logits, value = self.model(ems, items, mask, items_mask)
         n_rot = self.model.cfg.n_rotations
         full_mask = mask.unsqueeze(-1).expand(-1, -1, n_rot).reshape(mask.size(0), -1)
         logits = logits.masked_fill(~full_mask, float("-inf"))
@@ -182,7 +199,8 @@ class PPOTrainer:
         obs_list: list[dict[str, np.ndarray]] = [env._obs() for env in self._envs]
         for _ in range(self.cfg.rollout_steps):
             buf.obs_ems.append(np.stack([o["ems"] for o in obs_list]))
-            buf.obs_item.append(np.stack([o["item"] for o in obs_list]))
+            buf.obs_items.append(np.stack([o["items"] for o in obs_list]))
+            buf.obs_items_mask.append(np.stack([o["items_mask"] for o in obs_list]))
             buf.obs_mask.append(np.stack([o["mask"] for o in obs_list]))
 
             action, log_prob, value, _ = self._act(obs_list)
@@ -242,7 +260,8 @@ class PPOTrainer:
         flat = lambda arr: np.asarray(arr).reshape(T * N, *np.asarray(arr).shape[2:])
 
         ems_b = torch.from_numpy(flat(buf.obs_ems)).float().to(self.device)
-        item_b = torch.from_numpy(flat(buf.obs_item)).float().to(self.device)
+        items_b = torch.from_numpy(flat(buf.obs_items)).float().to(self.device)
+        items_mask_b = torch.from_numpy(flat(buf.obs_items_mask)).bool().to(self.device)
         mask_b = torch.from_numpy(flat(buf.obs_mask)).bool().to(self.device)
         actions_b = torch.from_numpy(flat(buf.actions)).long().to(self.device)
         old_logp_b = torch.from_numpy(flat(buf.log_probs)).float().to(self.device)
@@ -261,7 +280,9 @@ class PPOTrainer:
             for mb_start in range(0, T * N, self.cfg.minibatch_size):
                 mb = idx[mb_start:mb_start + self.cfg.minibatch_size]
                 mb_t = torch.from_numpy(mb).long().to(self.device)
-                logits, value = self.model(ems_b[mb_t], item_b[mb_t], mask_b[mb_t])
+                logits, value = self.model(
+                    ems_b[mb_t], items_b[mb_t], mask_b[mb_t], items_mask_b[mb_t]
+                )
                 n_rot = self.model.cfg.n_rotations
                 full_mask = mask_b[mb_t].unsqueeze(-1).expand(-1, -1, n_rot).reshape(len(mb), -1)
                 logits = logits.masked_fill(~full_mask, float("-inf"))

@@ -12,15 +12,17 @@ torch = pytest.importorskip("torch")
 def test_packing_transformer_forward_shapes():
     from app.algorithms.rl.packing_transformer import PackingTransformer, PackingTransformerConfig
 
-    m = PackingTransformer(PackingTransformerConfig(embed_dim=32, n_encoder_blocks=1))
+    cfg = PackingTransformerConfig(embed_dim=32, n_encoder_blocks=1, lookahead=4)
+    m = PackingTransformer(cfg)
     ems = torch.randn(2, 80, 6)
-    item = torch.randn(2, 2, 3)
+    items = torch.randn(2, cfg.lookahead, 2, 3)
     mask = torch.ones(2, 80, dtype=torch.bool)
     mask[:, 70:] = False
-    logits, value = m(ems, item, mask)
+    items_mask = torch.ones(2, cfg.lookahead, dtype=torch.bool)
+    items_mask[:, 2:] = False  # only first 2 lookahead slots are real items
+    logits, value = m(ems, items, mask, items_mask)
     assert logits.shape == (2, 160)
     assert value.shape == (2,)
-    # Padding logits must be -inf
     assert torch.isinf(logits[:, 70 * 2 :]).all()
 
 
