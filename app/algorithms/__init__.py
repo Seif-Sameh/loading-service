@@ -1,4 +1,4 @@
-"""Packing algorithms — heuristics, GA, and (later) PPO+Transformer.
+"""Packing algorithms — heuristics, GA, ensemble, and PPO+Transformer.
 
 All algorithms implement :class:`PackingAlgorithm` so the solver can treat them uniformly.
 """
@@ -25,13 +25,17 @@ ALGORITHM_REGISTRY: dict[str, type[PackingAlgorithm]] = {
 def get_algorithm(code: str, **kwargs) -> PackingAlgorithm:
     """Instantiate an algorithm by registry code.
 
-    The "ppo" code is loaded lazily so this function works in environments without PyTorch.
+    The "ppo" and "ensemble" codes are loaded lazily so this function works in environments
+    without PyTorch.
     """
     if code == "ppo":
         from app.algorithms.rl.ppo_agent import PPOPackingAgent
         return PPOPackingAgent(**kwargs)
+    if code == "ensemble":
+        from app.algorithms.ensemble import EnsembleAgent
+        return EnsembleAgent(**kwargs)
     if code not in ALGORITHM_REGISTRY:
-        raise KeyError(f"Unknown algorithm: {code!r}. Known: {sorted(ALGORITHM_REGISTRY) + ['ppo']}")
+        raise KeyError(f"Unknown algorithm: {code!r}. Known: {sorted(ALGORITHM_REGISTRY) + ['ppo', 'ensemble']}")
     return ALGORITHM_REGISTRY[code]()
 
 

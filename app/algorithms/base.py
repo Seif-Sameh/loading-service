@@ -26,6 +26,15 @@ class PackingAlgorithm(ABC):
     def select(self, state: PackingState) -> int:
         """Return an index into ``state.candidates``."""
 
+    def attach_env(self, env) -> None:  # noqa: ANN001
+        """Optional hook: receive the live :class:`PackingEnv` reference each step.
+
+        Default: no-op. Algorithms that need to roll the environment forward (e.g. ensemble /
+        lookahead / MCTS) override this to keep a reference and fork it inside
+        :meth:`select`. Called by :func:`solve` and :func:`iter_solve` before each step.
+        """
+        return None
+
 
 @dataclass
 class StepEvent:
@@ -57,6 +66,7 @@ def solve(
     events: list[StepEvent] = []
     t0 = time.perf_counter()
     done = False
+    algorithm.attach_env(env)
     while not done:
         state = env.state
         if not state.candidates:
@@ -108,6 +118,7 @@ def iter_solve(
     )
     t0 = time.perf_counter()
     done = False
+    algorithm.attach_env(env)
     while not done:
         state = env.state
         if not state.candidates:
